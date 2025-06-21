@@ -84,6 +84,8 @@ app.post('/criar-pedido', async (req, res) => {
             {
                 id: 'produto-1',
                 name: 'Acesso VIP',
+                planId: 'vip-acesso',
+                planName: 'Acesso VIP Mensal',
                 quantity: 1,
                 priceInCents: Math.round(valor * 100)
             }
@@ -169,6 +171,8 @@ app.get('/marcar-venda', async (req, res) => {
                 {
                     id: 'produto-1',
                     name: 'Acesso VIP',
+                    planId: 'vip-acesso',
+                    planName: 'Acesso VIP Mensal',
                     quantity: 1,
                     priceInCents: Math.round(valorNum * 100)
                 }

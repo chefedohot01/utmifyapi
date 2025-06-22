@@ -1,15 +1,5 @@
-{
-  "name": "utmify-backend",
-  "version": "1.0.0",
-  "description": "Backend para integração com UTMify",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "axios": "^1.6.8",
-    "dotenv": "^16.4.5",
-    "express": "^4.18.2",
-    "sqlite3": "^5.1.7"
-  }
+// Dentro do seu package.json, na seção "dependencies"
+"dependencies": {
+  "express": "^4.18.2", // Ou a versão mais recente compatível
+  "axios": "^1.6.8"   // Ou a versão mais recente compatível
 }

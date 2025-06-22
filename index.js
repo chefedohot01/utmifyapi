@@ -220,7 +220,7 @@ app.get('/marcar-venda', async (req, res) => {
 
 // 🚀 Inicia servidor
 // No seu index.js:
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 4000;
 
 app.listen(PORT, '0.0.0.0', () => { // Adicione '0.0.0.0' aqui
     console.log(`🚀 Servidor rodando na porta ${PORT}`);

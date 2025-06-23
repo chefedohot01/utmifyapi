@@ -1,15 +1,15 @@
 {
-  "name": "sua-api",
+  "name": "utmify-backend",
   "version": "1.0.0",
-  "description": "Sua descrição da API",
+  "description": "Backend para integração com UTMify",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
+    "axios": "^1.6.8",
+    "dotenv": "^16.4.5",
     "express": "^4.18.2",
-    "axios": "^1.6.8"
-  },
-  "devDependencies": {
+    "sqlite3": "^5.1.7"
   }
 }

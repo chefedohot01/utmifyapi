@@ -1,12 +1,17 @@
 const express = require('express');
 const axios = require('axios');
-require('dotenv').config();
+require('dotenv').config(); // Garante que as variáveis do .env sejam carregadas
 
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
 const app = express();
 app.use(express.json());
+
+// Adicione esta linha para habilitar CORS (essencial para testes locais)
+const cors = require('cors');
+app.use(cors({ origin: 'https://conteudoaquiamor.netlify.app' })); // Para testar, pode usar assim. Para produção, considere restringir a origem: app.use(cors({ origin: 'https://conteudoaquiamor.netlify.app' }));
+
 
 // 📦 Banco de dados
 const dbPath = path.resolve(__dirname, 'banco.db');
@@ -32,7 +37,7 @@ db.run(`CREATE TABLE IF NOT EXISTS vendas (
     timestamp INTEGER
 )`);
 
-// 🔑 Função para gerar chave única
+// 🔑 Função para gerar chave única para o banco de dados local
 function gerarChaveUnica({ valor, utm_source, utm_medium, utm_campaign, utm_content, utm_term }) {
     return `${valor}|${utm_source}|${utm_medium}|${utm_campaign}|${utm_content}|${utm_term}`;
 }
@@ -42,180 +47,121 @@ function vendaExiste(chave) {
     return new Promise((resolve, reject) => {
         db.get(`SELECT * FROM vendas WHERE chave = ?`, [chave], (err, row) => {
             if (err) reject(err);
-            resolve(!!row);
+            resolve(row); // Retorna a linha se existir, ou undefined se não
         });
     });
 }
 
 // 💾 Salva venda no banco
 function salvarVenda({ chave, valor, utm_source, utm_medium, utm_campaign, utm_content, utm_term, orderId }) {
-    const timestamp = Math.floor(Date.now() / 1000);
-    db.run(`INSERT INTO vendas (chave, valor, utm_source, utm_medium, utm_campaign, utm_content, utm_term, orderId, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [chave, valor, utm_source, utm_medium, utm_campaign, utm_content, utm_term, orderId, timestamp]);
+    return new Promise((resolve, reject) => {
+        const timestamp = Date.now(); // Salva o timestamp da venda
+        db.run(`INSERT INTO vendas (chave, valor, utm_source, utm_medium, utm_campaign, utm_content, utm_term, orderId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [chave, valor, utm_source, utm_medium, utm_campaign, utm_content, utm_term, orderId, timestamp],
+            function (err) {
+                if (err) reject(err);
+                resolve(this.lastID);
+            });
+    });
 }
 
-// 🚀 Endpoint POST manual (opcional, pode usar se quiser enviar via POST)
-app.post('/criar-pedido', async (req, res) => {
-    const { nome, email, valor, utm_source, utm_medium, utm_campaign, utm_content, utm_term } = req.body;
 
-    if (!nome || !email || !valor) {
-        return res.status(400).json({ error: 'Nome, email e valor são obrigatórios' });
-    }
-
-    const agora = new Date().toISOString().replace('T', ' ').substring(0, 19);
-
-    const payload = {
-        orderId: 'pedido-' + Date.now(),
-        platform: 'PushinPay',
-        paymentMethod: 'pix',
-        status: 'paid',
-        createdAt: agora,
-        approvedDate: agora,
-        refundedAt: null,
-        customer: {
-            name: nome,
-            email: email,
-            phone: null,
-            document: null,
-            country: 'BR'
-        },
-        products: [
-            {
-                id: 'produto-1',
-                name: 'Acesso VIP',
-                quantity: 1,
-                priceInCents: Math.round(valor * 100)
-            }
-        ],
-        trackingParameters: {
-            src: null,
-            sck: null,
-            utm_source: utm_source || null,
-            utm_campaign: utm_campaign || null,
-            utm_medium: utm_medium || null,
-            utm_content: utm_content || null,
-            utm_term: utm_term || null
-        },
-        commission: {
-            totalPriceInCents: Math.round(valor * 100),
-            gatewayFeeInCents: 0,
-            userCommissionInCents: Math.round(valor * 100)
-        },
-        isTest: false
-    };
-
-    try {
-        const response = await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, {
-            headers: {
-                'x-api-token': process.env.API_KEY,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        res.status(200).json({
-            message: 'Pedido criado com sucesso na UTMify',
-            data: response.data
-        });
-    } catch (error) {
-        console.error('Erro ao criar pedido:', error.response?.data || error.message);
-        res.status(500).json({
-            error: 'Erro ao criar pedido',
-            details: error.response?.data || error.message
-        });
-    }
-});
-
-// 🚦 Endpoint principal COM VERIFICAÇÃO DE DUPLICIDADE
+// 🚀 Endpoint principal para marcar venda
 app.get('/marcar-venda', async (req, res) => {
-    const { valor, utm_source, utm_medium, utm_campaign, utm_content, utm_term } = req.query;
+    const { valor, nome, email, utm_source, utm_medium, utm_campaign, utm_content, utm_term, fbp, fbc } = req.query;
 
-    if (!valor) {
-        return res.status(400).json({ error: 'Parâmetro valor é obrigatório' });
+    if (!valor || !email) {
+        return res.status(400).json({ success: false, message: 'Parâmetros "valor" e "email" são obrigatórios.' });
     }
 
-    const valorNum = parseFloat(valor);
-    if (isNaN(valorNum)) {
-        return res.status(400).json({ error: 'Valor inválido' });
+    const valorNum = parseFloat(valor.replace(',', '.'));
+    if (isNaN(valorNum) || valorNum <= 0) {
+        return res.status(400).json({ success: false, message: 'Valor inválido.' });
     }
 
+    // Gerar chave única para verificar duplicidade no banco de dados local
     const chave = gerarChaveUnica({ valor: valorNum, utm_source, utm_medium, utm_campaign, utm_content, utm_term });
-    const orderId = 'pedido-' + Date.now();
-    const agora = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
     try {
-        const jaExiste = await vendaExiste(chave);
-
-        if (jaExiste) {
-            return res.status(200).json({ success: false, message: '⚠️ Venda já registrada anteriormente' });
+        const existe = await vendaExiste(chave);
+        if (existe) {
+            console.warn('⚠️ Venda duplicada detectada no banco de dados:', chave);
+            return res.status(409).json({ success: false, message: 'Venda já registrada para esses parâmetros.' });
         }
 
+        // Gera um ID de pedido único (para sua referência e para a UTMify)
+        const orderId = `VENDA-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+        // Pega o timestamp atual no formato ISO 8601 (necessário pela UTMify)
+        const currentTimestampISO = new Date().toISOString();
+
+        // ✅ Prepara o NOVO payload para a API de Orders da UTMify
         const payload = {
-            orderId,
-            platform: 'PushinPay',
-            paymentMethod: 'pix',
-            status: 'paid',
-            createdAt: agora,
-            approvedDate: agora,
-            refundedAt: null,
+            orderId: orderId, // ID único do pedido
+            platform: "web", // Ex: "Hotmart", "Kiwi", "Stripe" - Coloque o da sua plataforma
+            paymentMethod: "unknown", // Ex: "credit_card", "boleto", "pix" - Coloque o método de pagamento
+            status: "paid", // ATUALIZADO: Usando "paid" conforme o erro exigia
+            createdAt: currentTimestampISO, // Data de criação do pedido
+            approvedDate: currentTimestampISO, // Data de aprovação (pode ser a mesma do createdAt para aprovação imediata)
             customer: {
-                name: "ClienteVIP",
-                email: "cliente@email.com",
-                phone: null,
-                document: null,
-                country: 'BR'
+                name: nome || 'Cliente Sem Nome',
+                email: email,
+                phone: null, // Se tiver telefone no front-end, passe aqui
+                document: null // Se tiver documento (CPF/CNPJ) no front-end, passe aqui
             },
-            products: [
-                {
-                    id: 'produto-1',
-                    name: 'Acesso VIP',
-                    quantity: 1,
-                    priceInCents: Math.round(valorNum * 100)
-                }
-            ],
             trackingParameters: {
-                src: null,
-                sck: null,
                 utm_source: utm_source || null,
                 utm_campaign: utm_campaign || null,
                 utm_medium: utm_medium || null,
                 utm_content: utm_content || null,
                 utm_term: utm_term || null
             },
+            product: {
+                id: `PROD-${Math.floor(Math.random() * 100000)}`, // NOVO: ID único do produto
+                name: 'Venda Geral', // Nome do produto para a UTMify
+                planId: `PLAN-${Math.floor(Math.random() * 100000)}`, // NOVO: ID do plano (pode ser um padrão)
+                planName: 'Plano Único', // NOVO: Nome do plano (pode ser um padrão)
+                quantity: 1, // NOVO: Quantidade do produto (assumindo 1 por padrão)
+                priceInCents: Math.round(valorNum * 100), // NOVO: Valor do produto em centavos
+            },
+            // 'commission' e 'isTest' mantidos no nível superior, pois não foram listados como erros de esquema
             commission: {
                 totalPriceInCents: Math.round(valorNum * 100),
                 gatewayFeeInCents: 0,
-                userCommissionInCents: Math.round(valorNum * 100)
+                userCommissionInCents: Math.round(valorNum * 100) // Se for 100% do valor, será o valor total
             },
-            isTest: false
+            isTest: false // Mudar para true se estiver em ambiente de testes da UTMify
         };
 
+        // 📤 Envia para a API de Orders da UTMify
         const response = await axios.post('https://api.utmify.com.br/api-credentials/orders', payload, {
             headers: {
-                'x-api-token': process.env.API_KEY,
+                'x-api-token': process.env.API_KEY, // A chave da API da UTMify (do seu arquivo .env)
                 'Content-Type': 'application/json'
             }
         });
 
+        // 💾 Salva a venda no banco de dados local após sucesso na UTMify
         salvarVenda({ chave, valor: valorNum, utm_source, utm_medium, utm_campaign, utm_content, utm_term, orderId });
 
+        console.log('✅ Pedido criado e registrado com sucesso na UTMify. Resposta:', response.data);
         return res.status(200).json({
             success: true,
             message: '✅ Pedido criado e registrado com sucesso na UTMify',
-            data: response.data
+            data: response.data // Retorna a resposta da UTMify
         });
 
     } catch (error) {
-        console.error('Erro ao criar pedido:', error.response?.data || error.message);
+        console.error('❌ Erro ao criar pedido na UTMify:', error.response?.data || error.message);
         return res.status(500).json({
-            error: 'Erro ao criar pedido',
+            success: false,
+            error: 'Erro ao criar pedido na UTMify',
             details: error.response?.data || error.message
         });
     }
 });
 
 // 🚀 Inicia servidor
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000; // Usa porta do ambiente ou 3000
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor rodando na porta ${PORT}`);
+    console.log(`🚀 API rodando em http://localhost:${PORT}`);
 });

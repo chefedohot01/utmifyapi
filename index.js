@@ -12,7 +12,7 @@ app.use(express.json());
 const cors = require('cors');
 // Para produção no Render, use a origem exata do seu Netlify:
 // app.use(cors({ origin: 'https://conteudoaquiamor.netlify.app' }));
-// Para desenvolvimento/testes locais, ou se ainda não definiu a origem exata para produção:
+// Para desenvolvimento/testes, ou se ainda não definiu a origem exata:
 app.use(cors());
 
 
@@ -26,10 +26,11 @@ const db = new sqlite3.Database(dbPath, (err) => {
     }
 });
 
-// 🔧 Cria tabela se não existir (AGORA COM orderId como UNIQUE e sem 'chave'!)
+// 🔧 Cria tabela se não existir (AGORA COM orderId como UNIQUE e SEM 'chave'!)
+// Inclui também 'nome', 'email', 'fbp', 'fbc' para o registro local
 db.run(`CREATE TABLE IF NOT EXISTS vendas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    orderId TEXT UNIQUE, -- orderId agora é o campo único para o banco de dados local
+    orderId TEXT UNIQUE, -- orderId é o campo único para o banco de dados local
     valor REAL,
     nome TEXT,
     email TEXT,
@@ -38,23 +39,23 @@ db.run(`CREATE TABLE IF NOT EXISTS vendas (
     utm_campaign TEXT,
     utm_content TEXT,
     utm_term TEXT,
+    fbp TEXT,             -- Campo para o Facebook Browser ID
+    fbc TEXT,             -- Campo para o Facebook Click ID
     timestamp INTEGER
 )`);
 
-// Removidas as funções 'gerarChaveUnica' e 'vendaExiste'
-// Não são mais necessárias, pois a deduplicação local foi removida.
-
-// 💾 Salva venda no banco (AJUSTADO: não usa mais 'chave' e inclui 'nome' e 'email')
-function salvarVenda({ valor, nome, email, utm_source, utm_medium, utm_campaign, utm_content, utm_term, orderId }) {
+// 💾 Salva venda no banco (AJUSTADO: usa orderId e inclui nome, email, fbp, fbc)
+function salvarVenda({ valor, nome, email, utm_source, utm_medium, utm_campaign, utm_content, utm_term, fbp, fbc, orderId }) {
     return new Promise((resolve, reject) => {
         const timestamp = Date.now(); // Salva o timestamp da venda
-        db.run(`INSERT INTO vendas (valor, nome, email, utm_source, utm_medium, utm_campaign, utm_content, utm_term, orderId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [valor, nome, email, utm_source, utm_medium, utm_campaign, utm_content, utm_term, orderId, timestamp],
+        db.run(`INSERT INTO vendas (valor, nome, email, utm_source, utm_medium, utm_campaign, utm_content, utm_term, fbp, fbc, orderId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [valor, nome, email, utm_source, utm_medium, utm_campaign, utm_content, utm_term, fbp, fbc, orderId, timestamp],
             function (err) {
                 if (err) {
                     console.error('Erro ao salvar venda no banco de dados local:', err.message);
                     reject(err);
                 } else {
+                    console.log(`Venda local salva com ID: ${this.lastID}, OrderId: ${orderId}`);
                     resolve(this.lastID);
                 }
             });
@@ -67,8 +68,10 @@ app.get('/marcar-venda', async (req, res) => {
     // Parâmetros (email ainda é obrigatório para o payload da UTMify)
     const { valor, nome, email, utm_source, utm_medium, utm_campaign, utm_content, utm_term, fbp, fbc } = req.query;
 
-    if (!valor || !email) { // Email ainda é necessário para o payload UTMify
-        return res.status(400).json({ success: false, message: 'Parâmetros "valor" e "email" são obrigatórios.' });
+    // Email é necessário para o payload da UTMify.
+    // O frontend já garante que 'valor' está presente para chegar até aqui.
+    if (!email) {
+        return res.status(400).json({ success: false, message: 'Parâmetro "email" é obrigatório.' });
     }
 
     const valorNum = parseFloat(valor.replace(',', '.'));
@@ -77,7 +80,8 @@ app.get('/marcar-venda', async (req, res) => {
     }
 
     try {
-        // Gera um ID de pedido único para CADA CHAMADA (para sua referência e para a UTMify)
+        // Gera um ID de pedido único para CADA CHAMADA
+        // Isso garante que cada acesso à página gere uma venda única na UTMify e no DB local.
         const orderId = `VENDA-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
         const currentTimestampISO = new Date().toISOString();
 
@@ -132,7 +136,7 @@ app.get('/marcar-venda', async (req, res) => {
 
         // ✅ Prepara o payload para a API de Orders da UTMify
         const payload = {
-            orderId: orderId,
+            orderId: orderId, // Usamos o orderId para garantir unicidade na UTMify
             platform: "Pushinpay",
             paymentMethod: "pix",
             status: "paid", // Assumimos que a página só carrega com pagamento confirmado
@@ -149,7 +153,11 @@ app.get('/marcar-venda', async (req, res) => {
                 utm_campaign: utm_campaign || null,
                 utm_medium: utm_medium || null,
                 utm_content: utm_content || null,
-                utm_term: utm_term || null
+                utm_term: utm_term || null,
+                // --- ESSAS SÃO AS LINHAS CRUCIAIS PARA FBP/FBC ---
+                fbp: fbp || null,
+                fbc: fbc || null
+                // --- FIM DAS LINHAS CRUCIAIS ---
             },
             product: {
                 id: productId,
@@ -164,7 +172,7 @@ app.get('/marcar-venda', async (req, res) => {
                 gatewayFeeInCents: 0,
                 userCommissionInCents: Math.round(valorNum * 100)
             },
-            isTest: false
+            isTest: false // Lembre-se de mudar para 'true' para testes na UTMify
         };
 
         // 📤 Envia para a API de Orders da UTMify
@@ -175,8 +183,8 @@ app.get('/marcar-venda', async (req, res) => {
             }
         });
 
-        // 💾 Salva a venda no banco de dados local (sem a 'chave', usando orderId como UNIQUE)
-        salvarVenda({ valor: valorNum, nome, email, utm_source, utm_medium, utm_campaign, utm_content, utm_term, orderId });
+        // 💾 Salva a venda no banco de dados local (incluindo fbp e fbc)
+        salvarVenda({ valor: valorNum, nome, email, utm_source, utm_medium, utm_campaign, utm_content, utm_term, fbp, fbc, orderId });
 
         console.log('✅ Pedido criado e registrado com sucesso na UTMify. Resposta:', response.data);
         return res.status(200).json({
@@ -188,7 +196,7 @@ app.get('/marcar-venda', async (req, res) => {
     } catch (error) {
         console.error('❌ Erro ao criar pedido na UTMify:', error.response?.data || error.message);
         return res.status(500).json({
-            success: false,
+            success: false, // Adicionado success: false para erros
             error: 'Erro ao criar pedido na UTMify',
             details: error.response?.data || error.message
         });
